@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.Reflection.Emit;
+using System.Text;
 
 using HarmonyLib;
 
@@ -33,7 +34,7 @@ namespace EchKode.PBMods.ShowEscalationValue
 			var loadOverworldEntity = new CodeInstruction(OpCodes.Ldarg_1);
 			var populateText = CodeInstruction.Call(typeof(Patch), nameof(PopulateOverlayText));
 
-			cm.MatchStartForward(getHasThreatRatingEscalatedMatch)
+			cm.MatchEndForward(getHasThreatRatingEscalatedMatch)
 				.MatchEndForward(roundToIntMatch)
 				.Advance(1);
 			var loadThreatRating = new CodeInstruction(OpCodes.Ldloc_S, cm.Operand);
@@ -58,9 +59,22 @@ namespace EchKode.PBMods.ShowEscalationValue
 		[HarmonyPostfix]
 		static void Civosi_StartPostfix(CIViewOverworldSelectionInfo __instance)
 		{
-			var go = Object.Instantiate(__instance.labelGarrisonBranch, __instance.holderTopMain.transform);
+			var go = Object.Instantiate(__instance.labelDescription, __instance.holderOffset.transform);
 			labelVictoryValue = go.GetComponent<UILabel>();
+			labelVictoryValue.enabled = true;
 			labelVictoryValue.text = "";
+			labelVictoryValue.bottomAnchor.Set(__instance.labelDescription.transform, 1f, labelOffset);
+			holderTop = __instance.holderTopMain.transform.parent.gameObject.GetComponent<UIWidget>();
+			holderTop.SetAnchor(labelVictoryValue.transform);
+
+			if (ModLink.Settings.logDiagnostics)
+			{
+				Debug.LogFormat(
+					"Mod {0} ({1}) victory value label instantiated | name: {2}",
+					ModLink.modIndex,
+					ModLink.modID,
+					UtilityTransform.GetTransformPath(labelVictoryValue.transform));
+			}
 
 			// Lift the buttons above the faction branch name label.
 			var depth = __instance.labelGarrisonBranch.depth + 1;
@@ -71,10 +85,63 @@ namespace EchKode.PBMods.ShowEscalationValue
 
 		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnEntityRefresh))]
 		[HarmonyTranspiler]
-		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler2(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+		{
+			// Replace formatting code with my routine. This puts the formatted string into a separate
+			// StringBuilder than the one being used for the rest of the description.
+
+			if (Harmony.DEBUG) { FileLog.Log("OnEntityRefreshTranspiler2"); }
+			var cm = new CodeMatcher(instructions, generator);
+			var escalationFieldInfo = AccessTools.DeclaredField(typeof(DataContainerOverworldEntityBlueprint), nameof(DataContainerOverworldEntityBlueprint.escalationProcessed));
+			var toStringMethodInfo = AccessTools.Method(typeof(object), nameof(ToString));
+			var clearMethodInfo = AccessTools.DeclaredMethod(typeof(StringBuilder), nameof(StringBuilder.Clear));
+			var escalationMatch = new CodeMatch(OpCodes.Ldfld, escalationFieldInfo);
+			var clearMatch = new CodeMatch(OpCodes.Callvirt, clearMethodInfo);
+			var branchMatch = new CodeMatch(OpCodes.Brtrue);
+			var loadDashMatch = new CodeMatch(OpCodes.Ldstr, "[-]");
+			var loadSitePersistent = new CodeInstruction(OpCodes.Ldloc_0);
+			var loadSiteOverworld = new CodeInstruction(OpCodes.Ldloc_1);
+			var format = CodeInstruction.Call(typeof(Patch), nameof(FormatEscalationAndWarScore));
+			var loadStringBuilder = CodeInstruction.LoadField(typeof(Patch), nameof(sb));
+			var clear = new CodeInstruction(OpCodes.Callvirt, clearMethodInfo);
+			var pop = new CodeInstruction(OpCodes.Pop);
+
+			cm.Start()
+				.MatchStartForward(escalationMatch)
+				.MatchStartBackwards(clearMatch)
+				.MatchStartBackwards(branchMatch)
+				.Advance(-1)
+				.InsertAndAdvance(loadStringBuilder)
+				.InsertAndAdvance(clear)
+				.InsertAndAdvance(pop)
+				.MatchStartForward(escalationMatch)
+				.Advance(-1);
+			var loadBlueprint = cm.Instruction.Clone();
+
+			cm.MatchEndForward(escalationMatch)
+				.Advance(2);
+			var deleteStart = cm.Pos;
+
+			cm.MatchEndForward(loadDashMatch)
+				.Advance(2);
+			var offset = deleteStart - cm.Pos;
+			cm.RemoveInstructionsWithOffsets(offset, 0)
+				.Advance(offset)
+				.InsertAndAdvance(loadSitePersistent)
+				.InsertAndAdvance(loadSiteOverworld)
+				.InsertAndAdvance(loadBlueprint)
+				.InsertAndAdvance(format);
+
+			return cm.InstructionEnumeration();
+		}
+
+		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnEntityRefresh))]
+		[HarmonyTranspiler]
+		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler3(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
 		{
 			// Always show dev info buttons on card in event screen.
 
+			if (Harmony.DEBUG) { FileLog.Log("OnEntityRefreshTranspiler3"); }
 			var cm = new CodeMatcher(instructions, generator);
 			var isEventLocal = generator.DeclareLocal(typeof(bool));
 			var onFadeMethodInfo = AccessTools.DeclaredMethod(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnFade));
@@ -102,10 +169,11 @@ namespace EchKode.PBMods.ShowEscalationValue
 
 		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnEntityRefresh))]
 		[HarmonyTranspiler]
-		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler2(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler4(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
 		{
 			// Replace call to OnFade() with one that doesn't set location.
 
+			if (Harmony.DEBUG) { FileLog.Log("OnEntityRefreshTranspiler4"); }
 			var cm = new CodeMatcher(instructions, generator);
 			var onFadeMethodInfo = AccessTools.DeclaredMethod(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnFade));
 			var onFadeMatch = new CodeMatch(OpCodes.Call, onFadeMethodInfo);
@@ -119,28 +187,102 @@ namespace EchKode.PBMods.ShowEscalationValue
 
 		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.OnEntityRefresh))]
 		[HarmonyTranspiler]
-		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler3(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+		static IEnumerable<CodeInstruction> Civosi_OnEntityRefreshTranspiler5(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
 		{
-			// Call routine to format the text for escalation value and show it.
+			// Use my routine to finalize layout at end of method.
 
+			if (Harmony.DEBUG) { FileLog.Log("OnEntityRefreshTranspiler5"); }
 			var cm = new CodeMatcher(instructions, generator);
+			var spriteBackgroundFieldInfo = AccessTools.DeclaredField(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.spriteBackground));
+			var descriptionLabelFieldInfo = AccessTools.DeclaredField(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.labelDescription));
+			var getGameObjectMethodInfo = AccessTools.DeclaredPropertyGetter(typeof(Component), nameof(GameObject.gameObject));
+			var getActiveSelfMethodInfo = AccessTools.DeclaredPropertyGetter(typeof(GameObject), nameof(GameObject.activeSelf));
+			var setActiveMethodInfo = AccessTools.DeclaredMethod(typeof(GameObject), nameof(GameObject.SetActive));
+			var convR4Match = new CodeMatch(OpCodes.Conv_R4);
+			var spriteBackgroundMatch = new CodeMatch(OpCodes.Ldfld, spriteBackgroundFieldInfo);
+			var setActiveMatch = new CodeMatch(OpCodes.Callvirt, setActiveMethodInfo);
+			var branchMatch = new CodeMatch(OpCodes.Brfalse_S);
 			var loadThis = new CodeInstruction(OpCodes.Ldarg_0);
-			var loadPersistentEntity = new CodeInstruction(OpCodes.Ldloc_0);
-			var loadOverworldEntity = new CodeInstruction(OpCodes.Ldloc_1);
-			var displayText = CodeInstruction.Call(typeof(Patch), nameof(DisplaySelectionText));
+			var loadSelected = new CodeInstruction(OpCodes.Ldarg_2);
+			var finalizeLayout = CodeInstruction.Call(typeof(Patch), nameof(FinalizeLayout));
 
 			cm.End()
-				.InsertAndAdvance(loadThis)
-				.InsertAndAdvance(loadPersistentEntity)
-				.InsertAndAdvance(loadOverworldEntity)
-				.InsertAndAdvance(displayText);
+				.MatchStartBackwards(convR4Match)
+				.Advance(-1);
+			var loadOffset2 = cm.Instruction.Clone();
+
+			cm.MatchStartBackwards(convR4Match)
+				.Advance(-1);
+			var loadOffset1 = cm.Instruction.Clone();
+
+			cm.MatchStartBackwards(spriteBackgroundMatch)
+				.MatchEndBackwards(setActiveMatch)
+				.MatchStartForward(branchMatch)
+				.Advance(-1);
+			var labels = new List<Label>(cm.Labels);
+			cm.Labels.Clear();
+			var loadFlag = cm.Instruction.Clone();
+			var deleteStart = cm.Pos;
+
+			cm.Advance(2);
+			var loadAbsolute = cm.Instruction.Clone();
+
+			cm.End().Advance(-1);
+			var offset = deleteStart - cm.Pos;
+
+			cm.RemoveInstructionsWithOffsets(offset, 0)
+				.Advance(offset);
+
+			cm.End()
+				.Insert(loadThis)
+				.AddLabels(labels)
+				.Advance(1)
+				.InsertAndAdvance(loadSelected)
+				.InsertAndAdvance(loadFlag)
+				.InsertAndAdvance(loadAbsolute)
+				.InsertAndAdvance(loadOffset1)
+				.InsertAndAdvance(loadOffset2)
+				.InsertAndAdvance(finalizeLayout);
+
+			return cm.InstructionEnumeration();
+		}
+
+		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.SetLocation))]
+		[HarmonyTranspiler]
+		static IEnumerable<CodeInstruction> Civosi_SetLocationTranspiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+		{
+			// Don't move the card down as much in the event screen if there is escalation information to show.
+
+			if (Harmony.DEBUG) { FileLog.Log("OnSetLocation"); }
+			var cm = new CodeMatcher(instructions, generator);
+			var getHeightMethodInfo = AccessTools.DeclaredPropertyGetter(typeof(UIWidget), nameof(UIWidget.height));
+			var getLengthMethodInfo = AccessTools.DeclaredPropertyGetter(typeof(StringBuilder), nameof(StringBuilder.Length));
+			var getHeightMatch = new CodeMatch(OpCodes.Callvirt, getHeightMethodInfo);
+			var loadAltLoc = new CodeInstruction(OpCodes.Ldarg_1);
+			var loadStringBuilder = CodeInstruction.LoadField(typeof(Patch), nameof(sb));
+			var getLength = new CodeInstruction(OpCodes.Callvirt, getLengthMethodInfo);
+			var loadOffset = new CodeInstruction(OpCodes.Ldc_I4, labelOffset / 2);
+			var sub = new CodeInstruction(OpCodes.Sub);
+
+			cm.MatchEndForward(getHeightMatch)
+				.Advance(1);
+			cm.CreateLabel(out var jumpLabel);
+			var skipAdjustment = new CodeInstruction(OpCodes.Brfalse_S, jumpLabel);
+
+			cm.InsertAndAdvance(loadAltLoc)
+				.InsertAndAdvance(skipAdjustment)
+				.InsertAndAdvance(loadStringBuilder)
+				.InsertAndAdvance(getLength)
+				.InsertAndAdvance(skipAdjustment)
+				.InsertAndAdvance(loadOffset)
+				.InsertAndAdvance(sub);
 
 			return cm.InstructionEnumeration();
 		}
 
 		[HarmonyPatch(typeof(CIViewOverworldSelectionInfo), nameof(CIViewOverworldSelectionInfo.SetLocation))]
 		[HarmonyPrefix]
-		static void Civosi_SetLocationPrefix(CIViewOverworldSelectionInfo __instance, bool alternateLocationUsed)
+		static void Civosi_SetLocationPrefix2(CIViewOverworldSelectionInfo __instance, bool alternateLocationUsed)
 		{
 			// If we've entered an event, refresh the card if the event target wasn't the last entity
 			// displayed by the card. This prevents the card from being pushed too far down because
@@ -180,6 +322,8 @@ namespace EchKode.PBMods.ShowEscalationValue
 		[HarmonyPostfix]
 		static void Civosi_SetLocationPostfix(CIViewOverworldSelectionInfo __instance, bool alternateLocationUsed)
 		{
+			// Animate moving developer buttons.
+
 			if (!DataShortcuts.debug.developerMode)
 			{
 				return;
@@ -201,6 +345,87 @@ namespace EchKode.PBMods.ShowEscalationValue
 			ltDescr.setIgnoreTimeScale(true);
 		}
 
+		public static void FormatEscalationAndWarScore(
+			PersistentEntity sitePersistent,
+			OverworldEntity siteOverworld,
+			DataContainerOverworldEntityBlueprint siteBlueprint)
+		{
+			var (provinceStatus, escalationGain, warScoreDealt, warScoreRestored) = OverworldUtility.GetWarValues(
+				sitePersistent,
+				siteOverworld,
+				siteBlueprint);
+			if (provinceStatus != OverworldUtility.ProvinceStatus.AtWar
+				&& provinceStatus != OverworldUtility.ProvinceStatus.Occupied)
+			{
+				return;
+			}
+			if (escalationGain == 0f && warScoreRestored == 0f && warScoreDealt == 0f)
+			{
+				return;
+			}
+
+			sb.AppendFormat("[7ebeff]{0}: ", Txt.Get(TextLibs.uiCombat, "end_header_victory_total"));
+			if (escalationGain != 0f)
+			{
+				sb.AppendFormat(
+					"\n+[b]{0:F0}[/b][aa] — {1}[ff]",
+					escalationGain,
+					Txt.Get(TextLibs.uiDifficultySettings, "overworld_rate_escalation_increase__header"));
+			}
+			if (warScoreRestored != 0f)
+			{
+				sb.AppendFormat(
+					"\n+[b]{0:F0}[/b][aa] — {1}[ff]",
+					warScoreRestored,
+					Txt.Get(TextLibs.uiOverworld , "province_state_war_score_player_header"));
+			}
+			if (warScoreDealt != 0f)
+			{
+				sb.AppendFormat(
+					"\n−[b]{0:F0}[/b][aa] — {1}[ff]",
+					warScoreDealt,
+					Txt.Get(TextLibs.uiOverworld, "province_state_war_score_enemy_header"));
+			}
+			sb.Append("[-]");
+		}
+
+		public static void FinalizeLayout(
+			CIViewOverworldSelectionInfo view,
+			bool selected,
+			bool knownAndRecognized,
+			int absolute,
+			int offset1,
+			int offset2)
+		{
+			if (knownAndRecognized)
+			{
+				var height = view.textureLocationImage.height;
+				absolute += height;
+				offset1 += height;
+			}
+
+			var hasEscalation = knownAndRecognized && sb.Length != 0;
+			if (hasEscalation)
+			{
+				labelVictoryValue.text = sb.ToString();
+				labelVictoryValue.bottomAnchor.Set(view.labelDescription.transform, 1f, labelOffset);
+
+				absolute += labelVictoryValue.height + labelOffset;
+				holderTop.SetAnchor(labelVictoryValue.transform);
+			}
+			else
+			{
+				labelVictoryValue.text = "";
+				holderTop.SetAnchor(view.labelDescription.transform);
+			}
+
+			view.spriteBackground.topAnchor.Set(labelVictoryValue.transform, 1f, absolute);
+			view.spriteEventFade.topAnchor.Set(labelVictoryValue.transform, 1f, absolute + 8);
+			view.holderTopContext.transform.localPosition = Vector3.up * offset1;
+			view.holderTopMain.transform.localPosition = Vector3.up * offset2;
+			view.holderSelectedOptions.gameObject.SetActive(selected);
+		}
+
 		public static void OnFadeSimple(CIViewOverworldSelectionInfo view, bool faded)
 		{
 			view.holderEventFade.SetActive(faded);
@@ -214,11 +439,11 @@ namespace EchKode.PBMods.ShowEscalationValue
 			DataContainerOverworldEntityBlueprint siteBlueprint,
 			int threatRating)
 		{
-			var (provinceStatus, escalationValue, warValue) = OverworldUtility.GetWarValues(sitePersistent, siteOverworld, siteBlueprint);
+			var (provinceStatus, escalationValue, enemyValue, _) = OverworldUtility.GetWarValues(sitePersistent, siteOverworld, siteBlueprint);
 			if (provinceStatus == OverworldUtility.ProvinceStatus.AtWar)
 			{
-				overlay.textFullLast = string.Format("{0}\n[ffaaaa]{1}[ffffff]/[ffaaaa][aa]{2}[ff][ffffff]/[ffaaaa]{3}", siteBlueprint.textNameProcessed?.s, threatRating, escalationValue, warValue);
-				overlay.textShortLast = string.Format("{0}/[aa]{1}[ff]/{2}", threatRating, escalationValue, warValue);
+				overlay.textFullLast = string.Format("{0}\n[ffaaaa]{1}[ffffff]/[ffaaaa][aa]{2}[ff][ffffff]/[ffaaaa]{3}", siteBlueprint.textNameProcessed?.s, threatRating, escalationValue, enemyValue);
+				overlay.textShortLast = string.Format("{0}/[aa]{1}[ff]/{2}", threatRating, escalationValue, enemyValue);
 				return;
 			}
 			if (provinceStatus == OverworldUtility.ProvinceStatus.Occupied && escalationValue != 0)
@@ -232,69 +457,17 @@ namespace EchKode.PBMods.ShowEscalationValue
 			overlay.textShortLast = threatRating.ToString();
 		}
 
-		public static void DisplaySelectionText(
-			CIViewOverworldSelectionInfo view,
-			PersistentEntity sitePersistent,
-			OverworldEntity siteOverworld)
-		{
-			var siteBlueprint = siteOverworld.hasDataLinkOverworldEntityBlueprint
-				? siteOverworld.dataLinkOverworldEntityBlueprint.data
-				: null;
-			if (siteBlueprint == null)
-			{
-				labelVictoryValue.text = "";
-				labelVictoryValue.gameObject.SetActive(false);
-				return;
-			}
-
-			var (provinceStatus, escalationValue, warValue) = OverworldUtility.GetWarValues(sitePersistent, siteOverworld, siteBlueprint);
-			var atWar = provinceStatus == OverworldUtility.ProvinceStatus.AtWar;
-			var occupied = provinceStatus == OverworldUtility.ProvinceStatus.Occupied;
-			if (!(atWar || occupied)
-				|| (occupied && escalationValue == 0)
-				|| (atWar && warValue == 0))
-			{
-				labelVictoryValue.text = "";
-				labelVictoryValue.gameObject.SetActive(false);
-				return;
-			}
-
-			var textKey = atWar ? warScoreTextKey : escalationTextKey;
-			var displayValue = atWar ? warValue : escalationValue;
-			labelVictoryValue.text = string.Format("[aa]{0} [ff]{1}", Txt.Get(TextLibs.uiOverworld, textKey), displayValue);
-			var imageLeftTop = GetLeftTopCorner(view.textureLocationImage);
-			var labelLeftBottom = GetLeftBottomCorner(labelVictoryValue);
-			if (imageLeftTop.y > labelLeftBottom.y)
-			{
-				var offset = imageLeftTop.y - labelLeftBottom.y;
-				var y = labelVictoryValue.transform.localPosition.y;
-				labelVictoryValue.transform.SetPositionLocalY(y + offset);
-			}
-			labelVictoryValue.gameObject.SetActive(true);
-		}
-
 		static void OnShiftAnimation(float time) => holder.localPosition = Vector3.Lerp(shiftFrom, shiftTo, time);
 
-		static Vector2Int GetLeftBottomCorner(UIWidget widget)
-		{
-			var root = widget.root;
-			var corners = widget.worldCorners;
-			var leftBottom = root.transform.InverseTransformPoint(corners[0]);
-			return Vector2Int.RoundToInt(leftBottom);
-		}
-
-		static Vector2Int GetLeftTopCorner(UIWidget widget)
-		{
-			var root = widget.root;
-			var corners = widget.worldCorners;
-			var leftTop = root.transform.InverseTransformPoint(corners[1]);
-			return Vector2Int.RoundToInt(leftTop);
-		}
-
+		const int labelOffset = 16;
 		static UILabel labelVictoryValue;
+		static UIWidget holderTop;
+
 		static Transform holder;
 		static Vector3 shiftFrom;
 		static Vector3 shiftTo;
+
+		static readonly StringBuilder sb = new StringBuilder();
 
 		const string escalationTextKey = "selection_escalation_value_prefix";
 		const string warScoreTextKey = "selection_war_score_prefix";

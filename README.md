@@ -2,7 +2,7 @@
 
 A library mod for [Phantom Brigade](https://braceyourselfgames.com/phantom-brigade/) that shows the escalation and war value of overworld sites and patrols.
 
-These fixes are for release version **1.2.0**.
+These fixes are for release version **1.2.1**.
 
 The overworld story is driven by liberating provinces. When you first enter an occupied province, you start out in a raiding mode where each action you take may increase an escalation value. This is a rough proxy of how aware the enemy is of your presence in that province. When you emerge victorious from combat with a patrol or a garrison at a site, you will increase the escalation value. However, you don't know how much that value will increase before engaging in combat. This mod will show the escalation value of each occupied site and enemy patrol, both on the map next to the site or patrol and also in the information card that pops up in the bottom right corner when you hover over a site/patrol or click on one.
 
